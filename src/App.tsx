@@ -69,7 +69,7 @@ const App: React.FC = () => {
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
 
   useEffect(() => {
-    socketRef.current = io("https://toktok-server.mcv.kr", {
+    socketRef.current = io("https://toktok-server.mcv.kr/api", {
       transports: ["websocket"],
       upgrade: false,
     });
