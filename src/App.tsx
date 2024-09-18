@@ -118,6 +118,7 @@ const VideoChat: React.FC = () => {
     };
 
     newPeerConnection.ontrack = (event) => {
+      console.log(event.streams[0]);
       setRemoteStream(event.streams[0]);
     };
 
@@ -155,7 +156,6 @@ const VideoChat: React.FC = () => {
 
   useEffect(() => {
     if (remoteVideoRef.current && remoteStream) {
-      console.log(remoteStream);
       remoteVideoRef.current.srcObject = remoteStream;
     }
   }, [remoteStream]);
