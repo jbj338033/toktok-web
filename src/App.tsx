@@ -35,7 +35,7 @@ const VideoChat: React.FC = () => {
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
-    const newSocket = io("https://finder-server.mcv.kr", {
+    const newSocket = io("https://toktok-server.mcv.kr", {
       withCredentials: true,
     });
     setSocket(newSocket);
