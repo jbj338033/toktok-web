@@ -23,7 +23,6 @@ const Button = styled.button`
 `;
 
 const VideoChat: React.FC = () => {
-  const [socket, setSocket] = useState<Socket | null>(null);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [peerConnection, setPeerConnection] =
@@ -33,12 +32,13 @@ const VideoChat: React.FC = () => {
   const [roomId, setRoomId] = useState<string | null>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  const socketRef = useRef<Socket | null>(null); // Use a ref for socket
 
   useEffect(() => {
     const newSocket = io("https://toktok-server.mcv.kr", {
       withCredentials: true,
     });
-    setSocket(newSocket);
+    socketRef.current = newSocket; // Set the socket in the ref
 
     navigator.mediaDevices
       .getUserMedia({ video: true, audio: true })
@@ -54,13 +54,18 @@ const VideoChat: React.FC = () => {
       if (localStream) {
         localStream.getTracks().forEach((track) => track.stop());
       }
+      if (peerConnection) {
+        peerConnection.close();
+      }
     };
   }, []);
 
   useEffect(() => {
+    const socket = socketRef.current;
     if (!socket) return;
 
     socket.on("matched", ({ roomId: newRoomId }) => {
+      console.log("Matched with a partner, room ID:", newRoomId);
       setMatched(true);
       setInQueue(false);
       setRoomId(newRoomId);
@@ -68,6 +73,7 @@ const VideoChat: React.FC = () => {
     });
 
     socket.on("offer", async ({ offer }) => {
+      console.log("Received offer");
       if (!peerConnection) return;
       await peerConnection.setRemoteDescription(
         new RTCSessionDescription(offer)
@@ -85,11 +91,13 @@ const VideoChat: React.FC = () => {
     });
 
     socket.on("iceCandidate", async ({ candidate }) => {
+      console.log("Received ICE candidate");
       if (!peerConnection) return;
       await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
     });
 
     socket.on("partnerDisconnected", () => {
+      console.log("Partner disconnected");
       if (peerConnection) {
         peerConnection.close();
       }
@@ -104,22 +112,37 @@ const VideoChat: React.FC = () => {
       socket.off("iceCandidate");
       socket.off("partnerDisconnected");
     };
-  }, [socket, peerConnection, roomId]);
+  }, [peerConnection, roomId]);
 
   const initializePeerConnection = async () => {
+    console.log("Initializing peer connection");
     const newPeerConnection = new RTCPeerConnection({
       iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
     });
 
     newPeerConnection.onicecandidate = (event) => {
       if (event.candidate) {
-        socket?.emit("iceCandidate", { candidate: event.candidate, roomId });
+        console.log("Sending ICE candidate", event.candidate);
+
+        socketRef.current?.emit("iceCandidate", {
+          candidate: event.candidate,
+          roomId,
+        }); // Use ref for socket
+      } else {
+        console.log("All ICE candidates have been sent.");
       }
     };
 
     newPeerConnection.ontrack = (event) => {
-      console.log(event.streams[0]);
+      console.log("Received remote track", event.streams[0]);
       setRemoteStream(event.streams[0]);
+    };
+
+    newPeerConnection.oniceconnectionstatechange = () => {
+      console.log(
+        "ICE connection state:",
+        newPeerConnection.iceConnectionState
+      );
     };
 
     if (localStream) {
@@ -132,30 +155,36 @@ const VideoChat: React.FC = () => {
 
     const offer = await newPeerConnection.createOffer();
     await newPeerConnection.setLocalDescription(offer);
-    socket?.emit("offer", { offer, roomId });
+    console.log("Sending offer");
+    socketRef.current?.emit("offer", { offer, roomId }); // Use ref for socket
   };
 
   const joinQueue = () => {
+    console.log("Joining queue");
     setInQueue(true);
-    socket?.emit("joinQueue");
+    socketRef.current?.emit("joinQueue"); // Use ref for socket
   };
 
   const leaveQueue = () => {
+    console.log("Leaving queue");
     setInQueue(false);
-    socket?.emit("leaveQueue");
+    socketRef.current?.emit("leaveQueue"); // Use ref for socket
   };
 
   const endChat = () => {
+    console.log("Ending chat");
     if (peerConnection) {
       peerConnection.close();
     }
     setMatched(false);
     setRemoteStream(null);
     setRoomId(null);
+    socketRef.current?.emit("leaveRoom", { roomId }); // Use ref for socket
   };
 
   useEffect(() => {
     if (remoteVideoRef.current && remoteStream) {
+      console.log("Setting remote stream to video element");
       remoteVideoRef.current.srcObject = remoteStream;
     }
   }, [remoteStream]);
