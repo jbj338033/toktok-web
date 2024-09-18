@@ -13,6 +13,7 @@ const Video = styled.video`
   width: 50%;
   max-width: 600px;
   margin: 10px;
+  border: 1px solid black;
 `;
 
 const Button = styled.button`
