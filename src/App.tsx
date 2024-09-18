@@ -155,6 +155,7 @@ const VideoChat: React.FC = () => {
 
   useEffect(() => {
     if (remoteVideoRef.current && remoteStream) {
+      console.log(remoteStream);
       remoteVideoRef.current.srcObject = remoteStream;
     }
   }, [remoteStream]);
