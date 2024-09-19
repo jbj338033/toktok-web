@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { io, Socket } from "socket.io-client";
 import styled from "@emotion/styled";
+import adapter from "webrtc-adapter";
 
 const Container = styled.div`
   display: flex;
@@ -34,8 +35,12 @@ const VideoChat: React.FC = () => {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const socketRef = useRef<Socket | null>(null); // Use a ref for socket
+  const roomIdRef = useRef<string | null>(null); // Ref for roomId
 
   useEffect(() => {
+    console.log("WebRTC adapter version:", adapter.browserDetails.version);
+    console.log("Browser:", adapter.browserDetails.browser);
+
     const newSocket = io("https://toktok-server.mcv.kr", {
       withCredentials: true,
     });
@@ -86,9 +91,15 @@ const VideoChat: React.FC = () => {
 
     socket.on("answer", async ({ answer }) => {
       if (!peerConnection) return;
-      await peerConnection.setRemoteDescription(
-        new RTCSessionDescription(answer)
-      );
+
+      try {
+        await peerConnection.setRemoteDescription(
+          new RTCSessionDescription(answer)
+        );
+        console.log("Remote answer set successfully");
+      } catch (error) {
+        console.error("Failed to set remote answer:", error);
+      }
     });
 
     socket.on("iceCandidate", async ({ candidate }) => {
@@ -117,25 +128,28 @@ const VideoChat: React.FC = () => {
 
   const initializePeerConnection = async () => {
     console.log("Initializing peer connection");
+
     const newPeerConnection = new RTCPeerConnection({
       iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
     });
 
     newPeerConnection.onicecandidate = (event) => {
       if (event.candidate) {
-        console.log("Sending ICE candidate", event.candidate);
+        console.log(
+          `On Ice Candidate candidate: ${event.candidate}, roomId: ${roomIdRef.current}`
+        );
 
         socketRef.current?.emit("iceCandidate", {
           candidate: event.candidate,
-          roomId,
-        }); // Use ref for socket
+          roomId: roomIdRef.current, // Use the ref to get the latest roomId
+        });
       } else {
         console.log("All ICE candidates have been sent.");
       }
     };
 
     newPeerConnection.ontrack = (event) => {
-      console.log("Received remote track", event.streams[0]);
+      console.log("Received remote track", event.track.kind);
       setRemoteStream(event.streams[0]);
     };
 
@@ -154,10 +168,13 @@ const VideoChat: React.FC = () => {
 
     setPeerConnection(newPeerConnection);
 
-    const offer = await newPeerConnection.createOffer();
+    const offer = await newPeerConnection.createOffer({
+      offerToReceiveAudio: true,
+      offerToReceiveVideo: true,
+    });
     await newPeerConnection.setLocalDescription(offer);
     console.log("Sending offer");
-    socketRef.current?.emit("offer", { offer, roomId }); // Use ref for socket
+    socketRef.current?.emit("offer", { offer, roomId: roomIdRef.current }); // Use the ref for roomId
   };
 
   const joinQueue = () => {
@@ -189,6 +206,10 @@ const VideoChat: React.FC = () => {
       remoteVideoRef.current.srcObject = remoteStream;
     }
   }, [remoteStream]);
+
+  useEffect(() => {
+    roomIdRef.current = roomId; // Sync roomId with roomIdRef
+  }, [roomId]);
 
   return (
     <Container>
