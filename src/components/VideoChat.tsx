@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from "react";
 import { useWebRTC } from "../hooks/useWebRTC";
 
-const WS_URL = "ws://localhost:8080/signal"; // Update with your backend URL
+const WS_URL = import.meta.env.VITE_WS_URL;
 
 export const VideoChat: React.FC = () => {
   const localVideoRef = useRef<HTMLVideoElement>(null);
