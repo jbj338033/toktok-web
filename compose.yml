@@ -1,0 +1,8 @@
+services:
+  coturn:
+    image: coturn/coturn
+    container_name: toktok-coturn
+    network_mode: host
+    volumes:
+      - ./coturn.conf:/etc/coturn/turnserver.conf
+    restart: always

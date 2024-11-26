@@ -1,11 +1,16 @@
 import React from "react";
 import { VideoChat } from "./components/VideoChat";
+import Home from "./pages/Home";
+import { BrowserRouter, Route, Routes } from "react-router-dom";
 
 const App: React.FC = () => {
   return (
-    <div className="min-h-screen bg-gray-900">
-      <VideoChat />
-    </div>
+    <BrowserRouter>
+      <Routes>
+        <Route path="/1" element={<VideoChat />} />
+        <Route path="/" element={<Home />} />
+      </Routes>
+    </BrowserRouter>
   );
 };
 

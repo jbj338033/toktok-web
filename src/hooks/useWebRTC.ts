@@ -6,7 +6,11 @@ const configuration = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
+    { urls: "stun:stun2.l.google.com:19302" },
+    { urls: "stun:stun3.l.google.com:19302" },
+    { urls: "stun:stun4.l.google.com:19302" },
   ],
+  iceCandidatePoolSize: 10,
 };
 
 export const useWebRTC = (wsUrl: string) => {
@@ -19,41 +23,112 @@ export const useWebRTC = (wsUrl: string) => {
   const peerConnection = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const matchReceived = useRef<boolean>(false);
+  const connectionTimeout = useRef<NodeJS.Timeout | null>(null);
 
   const { sendMessage, lastMessage } = useWebSocket(wsUrl, {
     onOpen: () => console.log("WebSocket Connected"),
     onError: () => setError("WebSocket connection error"),
     shouldReconnect: () => true,
+    reconnectAttempts: 5,
+    reconnectInterval: 2000,
   });
+
+  const cleanup = useCallback(() => {
+    if (connectionTimeout.current) {
+      clearTimeout(connectionTimeout.current);
+    }
+    if (peerConnection.current) {
+      peerConnection.current.close();
+      peerConnection.current = null;
+    }
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((track) => track.stop());
+      localStreamRef.current = null;
+    }
+    matchReceived.current = false;
+    setIsConnected(false);
+    setIsInitiator(false);
+    setRemoteStream(null);
+  }, []);
+
+  const restartConnection = useCallback(async () => {
+    cleanup();
+    createPeerConnection();
+    if (isInitiator) {
+      await createAndSendOffer();
+    }
+  }, [cleanup, isInitiator]);
 
   const createPeerConnection = useCallback(() => {
     if (peerConnection.current) {
-      console.log("Peer connection already exists");
-      return;
+      console.log("Closing existing peer connection");
+      peerConnection.current.close();
     }
 
     try {
-      console.log("Creating peer connection");
+      console.log("Creating new peer connection");
       const pc = new RTCPeerConnection(configuration);
 
+      // Set up connection monitoring
+      pc.oniceconnectionstatechange = () => {
+        console.log("ICE Connection State:", pc.iceConnectionState);
+        if (
+          pc.iceConnectionState === "failed" ||
+          pc.iceConnectionState === "disconnected"
+        ) {
+          console.log(
+            "ICE Connection failed or disconnected - attempting restart"
+          );
+          restartConnection();
+        }
+      };
+
+      pc.onconnectionstatechange = () => {
+        console.log("Connection State:", pc.connectionState);
+        if (pc.connectionState === "connected") {
+          console.log("Peer Connection established successfully");
+          setIsConnected(true);
+          // Clear any existing timeout
+          if (connectionTimeout.current) {
+            clearTimeout(connectionTimeout.current);
+          }
+        } else if (
+          pc.connectionState === "failed" ||
+          pc.connectionState === "disconnected"
+        ) {
+          console.log("Connection failed or disconnected - attempting restart");
+          restartConnection();
+        }
+      };
+
+      pc.ontrack = (event) => {
+        console.log("Remote track received:", event.track.kind);
+        if (event.streams && event.streams[0]) {
+          console.log("Setting remote stream");
+          setRemoteStream(event.streams[0]);
+
+          event.track.onended = () => {
+            console.log("Remote track ended");
+          };
+
+          event.track.onmute = () => {
+            console.log("Remote track muted");
+          };
+
+          event.track.onunmute = () => {
+            console.log("Remote track unmuted");
+          };
+        }
+      };
+
       if (localStreamRef.current) {
-        console.log(
-          "Initial adding of local tracks:",
-          localStreamRef.current.getTracks()
-        );
+        console.log("Adding local tracks to peer connection");
         localStreamRef.current.getTracks().forEach((track) => {
           pc.addTrack(track, localStreamRef.current!);
         });
       } else {
         console.warn("No local stream available when creating peer connection");
       }
-
-      pc.ontrack = (event) => {
-        console.log("Received remote track", event.streams[0]);
-        if (event.streams && event.streams[0]) {
-          setRemoteStream(event.streams[0]);
-        }
-      };
 
       pc.onicecandidate = (event) => {
         if (event.candidate) {
@@ -66,29 +141,23 @@ export const useWebRTC = (wsUrl: string) => {
         }
       };
 
-      pc.onconnectionstatechange = () => {
-        console.log("Connection state changed:", pc.connectionState);
-        if (pc.connectionState === "connected") {
-          console.log("Peer Connection fully established!");
-          setIsConnected(true);
-        } else if (
-          pc.connectionState === "failed" ||
-          pc.connectionState === "disconnected"
-        ) {
-          console.log("Connection failed - cleaning up");
-          pc.close();
-          peerConnection.current = null;
-          matchReceived.current = false;
-          setIsConnected(false);
-        }
-      };
-
       peerConnection.current = pc;
+
+      // Set a timeout for connection establishment
+      if (connectionTimeout.current) {
+        clearTimeout(connectionTimeout.current);
+      }
+      connectionTimeout.current = setTimeout(() => {
+        if (pc.connectionState !== "connected") {
+          console.log("Connection timeout - attempting restart");
+          restartConnection();
+        }
+      }, 10000); // 10 seconds timeout
     } catch (err) {
       console.error("Error creating peer connection:", err);
       setError("Failed to create peer connection");
     }
-  }, [sendMessage]);
+  }, [sendMessage, restartConnection]);
 
   const createAndSendOffer = async () => {
     if (!peerConnection.current) {
@@ -101,6 +170,7 @@ export const useWebRTC = (wsUrl: string) => {
       const offer = await peerConnection.current.createOffer({
         offerToReceiveAudio: true,
         offerToReceiveVideo: true,
+        iceRestart: true,
       });
 
       console.log("Setting local description...");
@@ -115,6 +185,7 @@ export const useWebRTC = (wsUrl: string) => {
     } catch (err) {
       console.error("Error creating offer:", err);
       setError("Failed to create offer");
+      restartConnection();
     }
   };
 
@@ -122,11 +193,24 @@ export const useWebRTC = (wsUrl: string) => {
     const startLocalStream = async () => {
       try {
         console.log("Requesting user media");
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
+        const constraints = {
+          video: {
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            frameRate: { ideal: 30 },
+          },
           audio: true,
-        });
+        };
+
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
         console.log("Got local stream with tracks:", stream.getTracks());
+
+        // Configure video track for optimal performance
+        stream.getVideoTracks().forEach((track) => {
+          const settings = track.getSettings();
+          console.log("Video track settings:", settings);
+        });
+
         setLocalStream(stream);
         localStreamRef.current = stream;
       } catch (err) {
@@ -134,20 +218,10 @@ export const useWebRTC = (wsUrl: string) => {
         console.error("Media error:", err);
       }
     };
-    startLocalStream();
 
-    return () => {
-      console.log("Cleaning up...");
-      localStreamRef.current?.getTracks().forEach((track) => track.stop());
-      if (peerConnection.current) {
-        peerConnection.current.close();
-        peerConnection.current = null;
-      }
-      matchReceived.current = false;
-      setIsConnected(false);
-      setIsInitiator(false);
-    };
-  }, []);
+    startLocalStream();
+    return cleanup;
+  }, [cleanup]);
 
   useEffect(() => {
     if (!lastMessage?.data) return;
@@ -193,6 +267,7 @@ export const useWebRTC = (wsUrl: string) => {
             console.log("Sent answer");
           } catch (err) {
             console.error("Error during offer processing:", err);
+            restartConnection();
           }
         } else if (signal.type === "answer" && peerConnection.current) {
           console.log("Processing answer");
@@ -204,24 +279,37 @@ export const useWebRTC = (wsUrl: string) => {
             console.log("Remote description set successfully");
           } catch (err) {
             console.error("Error setting remote description:", err);
+            restartConnection();
           }
         } else if (signal.type === "candidate" && peerConnection.current) {
           console.log("Processing ICE candidate");
           const candidate = JSON.parse(signal.data);
           if (peerConnection.current.remoteDescription) {
-            await peerConnection.current.addIceCandidate(
-              new RTCIceCandidate(candidate)
-            );
+            try {
+              await peerConnection.current.addIceCandidate(
+                new RTCIceCandidate(candidate)
+              );
+            } catch (err) {
+              console.error("Error adding ICE candidate:", err);
+            }
           }
         }
       } catch (err) {
         console.error("Signal error:", err);
         setError("Failed to process signaling message");
+        restartConnection();
       }
     };
 
     handleSignal();
-  }, [lastMessage, sendMessage, createPeerConnection]);
+  }, [lastMessage, sendMessage, createPeerConnection, restartConnection]);
 
-  return { localStream, remoteStream, isConnected, error, isInitiator };
+  // Expose connection status and streams
+  return {
+    localStream,
+    remoteStream,
+    isConnected,
+    error,
+    isInitiator,
+  };
 };
